@@ -6,6 +6,90 @@ import os
 
 
 
+import numpy as np
+import pandas as pd
+
+# -------------------------------
+# KPI CALCULATIONS
+# -------------------------------
+
+def compute_kpis(df):
+
+    df = df.copy()
+
+    # Avoid divide-by-zero issues
+    df["views"] = df["views"].replace(0, np.nan)
+
+    # ---------------- Engagement KPIs ----------------
+    df["engagement_rate"] = ((df["likes"] + df["comments"]) / df["views"]).fillna(0)
+    df["like_rate"] = (df["likes"] / df["views"]).fillna(0)
+    df["comment_rate"] = (df["comments"] / df["views"]).fillna(0)
+
+    # ---------------- Growth KPIs ----------------
+    df["views_per_day"] = (df["views"] / df["days_old"]).replace([np.inf, -np.inf], 0).fillna(0)
+
+    df["velocity_score"] = df["views_per_day"] * df["engagement_rate"]
+
+    # ---------------- Content Health ----------------
+    df["content_strength"] = (
+        df["engagement_rate"] * 0.5 +
+        df["like_rate"] * 0.3 +
+        df["comment_rate"] * 0.2
+    )
+
+    # ---------------- Opportunity Score ----------------
+    df["opportunity_score"] = (
+        (df["engagement_rate"] * 100) -
+        (df["views_per_day"] / df["views_per_day"].max() * 50)
+    )
+
+    # ---------------- Final Score ----------------
+    df["final_score"] = (
+        df["content_strength"] * 40 +
+        df["velocity_score"] * 30 +
+        df["opportunity_score"] * 30
+    )
+
+    return df
+
+
+
+
+def generate_next_content_strategy(df):
+
+    insights = []
+
+    # 1. Best performing videos
+    top = df.sort_values("engagement_rate", ascending=False).head(3)
+
+    top_topics = top["title"].tolist()
+
+    insights.append("🔥 Based on your top-performing content:")
+
+    for t in top_topics:
+        insights.append(f"👉 Replicate theme from: {t[:70]}")
+
+    # 2. High velocity content
+    fast_growth = df.sort_values("views_per_day", ascending=False).head(3)
+
+    insights.append("\n🚀 High momentum formats:")
+
+    for t in fast_growth["title"].tolist():
+        insights.append(f"👉 Scale similar content to: {t[:70]}")
+
+    # 3. Underutilized gems
+    gems = df[(df["engagement_rate"] > df["engagement_rate"].median()) &
+              (df["views_per_day"] < df["views_per_day"].median())]
+
+    if not gems.empty:
+        insights.append("\n💎 Hidden opportunities:")
+
+        for t in gems["title"].head(3).tolist():
+            insights.append(f"👉 Boost distribution of: {t[:70]}")
+
+    return insights
+
+
 st.markdown("""
 <style>
 /* Global spacing */
@@ -88,8 +172,11 @@ def extract_channel_id(user_input, youtube):
 
     return None
 
+from datetime import datetime
+import pandas as pd
+
 # -------------------------------
-# GET VIDEOS
+# GET VIDEOS (CLEAN + SAFE + KPI READY)
 # -------------------------------
 def get_channel_videos(channel_id):
     videos = []
@@ -102,6 +189,7 @@ def get_channel_videos(channel_id):
     ).execute()
 
     for item in search_response.get("items", []):
+
         video_id = item["id"].get("videoId")
         if not video_id:
             continue
@@ -119,15 +207,51 @@ def get_channel_videos(channel_id):
         snippet = video_data.get("snippet", {})
         stats = video_data.get("statistics", {})
 
+        # ---------------- SAFE EXTRACTION ----------------
+        views = int(stats.get("viewCount", 0))
+        likes = int(stats.get("likeCount", 0))
+        comments = int(stats.get("commentCount", 0))
+
+        published_at = snippet.get("publishedAt")
+
+        # ---------------- TIMEZONE SAFE CONVERSION ----------------
+        published_at_dt = pd.to_datetime(
+            published_at,
+            utc=True,
+            errors="coerce"
+        )
+
         videos.append({
             "video_id": video_id,
             "title": snippet.get("title", "N/A"),
-            "views": int(stats.get("viewCount", 0)),
-            "likes": int(stats.get("likeCount", 0)),
-            "published_at": snippet.get("publishedAt")
+            "published_at": published_at_dt,
+            "views": views,
+            "likes": likes,
+            "comments": comments,
+            "url": f"https://www.youtube.com/watch?v={video_id}"
         })
 
-    return pd.DataFrame(videos)
+    df = pd.DataFrame(videos)
+
+    # ---------------- DERIVED FIELD (FIXED TIMEZONE ISSUE) ----------------
+    if not df.empty:
+
+        # FIX: use UTC-aware timestamp
+        now = pd.Timestamp.now(tz="UTC")
+
+        df["days_old"] = (now - df["published_at"]).dt.days
+
+        # Clean edge cases
+        df["days_old"] = df["days_old"].fillna(1)
+        df["days_old"] = df["days_old"].apply(lambda x: max(int(x), 1))
+
+    else:
+        df["days_old"] = []
+
+    return df
+
+
+
 
 # -------------------------------
 # UI
@@ -191,6 +315,9 @@ if st.button("Analyze Channel"):
                 st.success(f"Channel detected: {channel_id}")
 
                 df = get_channel_videos(channel_id)
+                df = compute_kpis(df)
+
+
 
                 if df.empty:
                     st.warning("No videos found")
@@ -321,6 +448,79 @@ if st.button("Analyze Channel"):
                     st.divider()
 
 
+                    st.subheader("📊 Content Intelligence KPIs")
+
+                    col1, col2, col3, col4 = st.columns(4)
+
+                    col1.metric(
+                        "Engagement Rate",
+                        f"{df['engagement_rate'].mean():.2%}"
+                    )
+
+                    col2.metric(
+                        "Like Rate",
+                        f"{df['like_rate'].mean():.2%}"
+                    )
+
+                    col3.metric(
+                        "Comment Rate",
+                        f"{df['comment_rate'].mean():.2%}"
+                    )
+
+                    col4.metric(
+                        "Avg Velocity",
+                        f"{df['velocity_score'].mean():.0f}"
+                    )
+
+
+                    import plotly.express as px
+
+                    st.subheader("🔥 Content Opportunity Heatmap")
+
+                    fig_heatmap = px.scatter(
+                        df,
+                        x="views_per_day",
+                        y="engagement_rate",
+                        size="views",
+                        color="status",
+                        hover_data=["title", "views", "likes", "comments"],
+                        title="Opportunity Heatmap: Momentum vs Engagement"
+                    )
+
+                    st.plotly_chart(fig_heatmap, use_container_width=True, key="heatmap")
+
+
+
+
+                    st.subheader("🧠 Growth Strategy Engine")
+
+                    strategy = generate_next_content_strategy(df)
+                    strategy = [s.replace("\n", " ").strip() for s in strategy]
+
+                    replicate = [s for s in strategy if "Replicate" in s or "top-performing" in s]
+                    scale = [s for s in strategy if "momentum" in s or "Scale" in s]
+                    gems = [s for s in strategy if "Hidden" in s or "opportunity" in s]
+
+                    col1, col2, col3 = st.columns(3)
+
+                    with col1:
+                        st.markdown("### 🔥 Replicate Winners")
+                        for item in replicate[:3]:
+                            st.info(item)
+
+                    with col2:
+                        st.markdown("### 🚀 Scale Fast Content")
+                        for item in scale[:3]:
+                            st.success(item)
+
+                    with col3:
+                        st.markdown("### 💎 Hidden Opportunities")
+                        for item in gems[:3]:
+                            st.warning(item)
+
+
+
+
 
                     # -------------------------------
                     # CHART
@@ -352,6 +552,44 @@ if st.button("Analyze Channel"):
                         st.plotly_chart(fig2, use_container_width=True, key="scatter_chart")
 
                     st.divider()
+
+
+
+                    st.subheader("📊 Content Intelligence Dashboard")
+
+                    import plotly.express as px
+
+                    # -------------------------------
+                    # CHART 1: Engagement Map
+                    # -------------------------------
+                    fig3 = px.scatter(
+                        df,
+                        x="views",
+                        y="engagement_rate",
+                        color="content_strength",
+                        size="views",
+                        hover_data=["title"],
+                        title="Engagement vs Views (Content Quality Map)"
+                    )
+
+                    st.plotly_chart(fig3, use_container_width=True, key="engagement_chart")
+
+                    # -------------------------------
+                    # CHART 2: Opportunity Matrix
+                    # -------------------------------
+                    fig4 = px.scatter(
+                        df,
+                        x="views_per_day",
+                        y="opportunity_score",
+                        color="final_score",
+                        size="views",
+                        hover_data=["title"],
+                        title="Opportunity Detection Matrix"
+                    )
+
+                    st.plotly_chart(fig4, use_container_width=True, key="opportunity_chart")
+
+
 
 
 
