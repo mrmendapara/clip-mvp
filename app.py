@@ -207,6 +207,11 @@ def get_channel_videos(channel_id):
         snippet = video_data.get("snippet", {})
         stats = video_data.get("statistics", {})
 
+        title = snippet.get("title", "N/A")
+
+        # STEP 1: Shorts detection
+        is_short = "#shorts" in title.lower()
+
         # ---------------- SAFE EXTRACTION ----------------
         views = int(stats.get("viewCount", 0))
         likes = int(stats.get("likeCount", 0))
@@ -223,12 +228,13 @@ def get_channel_videos(channel_id):
 
         videos.append({
             "video_id": video_id,
-            "title": snippet.get("title", "N/A"),
+            "title": title,
             "published_at": published_at_dt,
             "views": views,
             "likes": likes,
             "comments": comments,
-            "url": f"https://www.youtube.com/watch?v={video_id}"
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "content_type": "Short" if is_short else "Video"
         })
 
     df = pd.DataFrame(videos)
@@ -294,6 +300,25 @@ def generate_insights(df):
     top = df.sort_values("views_per_day", ascending=False).iloc[0]
     insights.append(f"🚀 Top performer: '{top['title'][:50]}...' driving highest engagement")
 
+
+    # -------------------------------
+    # Shorts vs Video Strategy Insight (STEP 5)
+    # -------------------------------
+    shorts_df = df[df["content_type"] == "Short"]
+    videos_df = df[df["content_type"] == "Video"]
+
+    if len(df) > 0:
+        short_ratio = len(shorts_df) / len(df)
+
+        if short_ratio > 0.6:
+            insights.append("📱 Shorts-heavy strategy detected — optimize for high-frequency posting")
+        elif short_ratio < 0.2:
+            insights.append("🎯 Opportunity: Increase Shorts content to boost reach and discoverability")
+        else:
+            insights.append("⚖️ Balanced content mix — maintain Shorts + long-form synergy")
+
+
+
     return insights
 
 
@@ -317,6 +342,8 @@ if st.button("Analyze Channel"):
                 df = get_channel_videos(channel_id)
                 df = compute_kpis(df)
 
+
+                df["content_type"] = df["content_type"].fillna("Video")
 
 
                 if df.empty:
@@ -519,6 +546,21 @@ if st.button("Analyze Channel"):
                             st.warning(item)
 
 
+                    st.subheader("📱 Content Format Analysis")
+
+                    col1, col2 = st.columns(2)
+
+                    shorts_df = df[df["content_type"] == "Short"]
+                    videos_df = df[df["content_type"] == "Video"]
+
+                    with col1:
+                        st.metric("Shorts Count", len(shorts_df))
+                        st.metric("Avg Shorts Views", f"{shorts_df['views'].mean():.0f}" if not shorts_df.empty else 0)
+
+                    with col2:
+                        st.metric("Videos Count", len(videos_df))
+                        st.metric("Avg Video Views", f"{videos_df['views'].mean():.0f}" if not videos_df.empty else 0)
+
 
 
 
@@ -553,6 +595,17 @@ if st.button("Analyze Channel"):
 
                     st.divider()
 
+                    import plotly.express as px
+
+                    fig = px.box(
+                        df,
+                        x="content_type",
+                        y="views",
+                        color="content_type",
+                        title="Shorts vs Long-form Performance Distribution"
+                    )
+
+                    st.plotly_chart(fig, use_container_width=True, key="format_compare")
 
 
                     st.subheader("📊 Content Intelligence Dashboard")
