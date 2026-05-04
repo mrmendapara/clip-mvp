@@ -4,6 +4,48 @@ from googleapiclient.discovery import build
 import re
 import os
 
+
+
+st.markdown("""
+<style>
+/* Global spacing */
+.block-container {
+    padding-top: 1.5rem;
+    padding-bottom: 1rem;
+}
+
+/* Card style */
+.card {
+    background-color: #161B22;
+    padding: 20px;
+    border-radius: 12px;
+    box-shadow: 0 0 10px rgba(0,0,0,0.3);
+    margin-bottom: 15px;
+}
+
+/* KPI number */
+.kpi {
+    font-size: 28px;
+    font-weight: bold;
+}
+
+/* KPI label */
+.kpi-label {
+    font-size: 14px;
+    color: #9BA3AF;
+}
+
+/* Section titles */
+.section-title {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 10px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+
 # -------------------------------
 # CONFIG
 # -------------------------------
@@ -98,6 +140,39 @@ user_input = st.text_input(
     value="https://www.youtube.com/@googledevelopers"
 )
 
+def generate_insights(df):
+    insights = []
+
+    total = len(df)
+    dead = len(df[df["status"] == "Dead"])
+    evergreen = len(df[df["status"] == "Evergreen"])
+    at_risk = len(df[df["status"] == "At Risk"])
+
+    dead_pct = round((dead / total) * 100, 1) if total else 0
+
+    # Insight 1: content health
+    if dead_pct > 30:
+        insights.append(f"🔴 High underperforming content: {dead_pct}% videos are dead or inactive")
+    else:
+        insights.append(f"🟢 Healthy content mix: only {dead_pct}% underperforming videos")
+
+    # Insight 2: evergreen strength
+    if evergreen > total * 0.4:
+        insights.append("🌱 Strong evergreen base detected (good long-term content strategy)")
+    else:
+        insights.append("⚠️ Low evergreen ratio — consider creating more long-term content")
+
+    # Insight 3: at risk content
+    if at_risk > 0:
+        insights.append(f"⚠️ {at_risk} videos are at risk and need optimization")
+
+    # Insight 4: performance signal
+    top = df.sort_values("views_per_day", ascending=False).iloc[0]
+    insights.append(f"🚀 Top performer: '{top['title'][:50]}...' driving highest engagement")
+
+    return insights
+
+
 # -------------------------------
 # MAIN ACTION
 # -------------------------------
@@ -159,7 +234,31 @@ if st.button("Analyze Channel"):
                     df["score"] = df.apply(score_video, axis=1)
                     df["status"] = df["score"].apply(classify)
 
-                    
+                    def generate_top_insights(df):
+                        insights = []
+
+                        total = len(df)
+                        dead = len(df[df["status"] == "Dead"])
+                        evergreen = len(df[df["status"] == "Evergreen"])
+
+                        # % dead content
+                        dead_pct = round((dead / total) * 100, 1)
+                        if dead_pct > 30:
+                            insights.append(f"🔴 {dead_pct}% of content is underperforming — cleanup opportunity")
+
+                        # Best performer
+                        top_video = df.sort_values("views_per_day", ascending=False).iloc[0]
+                        insights.append(f"🚀 Top video: '{top_video['title'][:50]}' driving high engagement")
+
+                        # Worst performer
+                        worst_video = df.sort_values("views_per_day").iloc[0]
+                        insights.append(f"⚠️ Low performer: '{worst_video['title'][:50]}' needs optimization")
+
+                        # Evergreen signal
+                        if evergreen > total * 0.4:
+                            insights.append("🌱 Strong evergreen content base — good for long-term growth")
+
+                        return insights     
 
                     # -------------------------------
                     # AI RECOMMENDATION ENGINE (RULE-BASED)
@@ -194,13 +293,34 @@ if st.button("Analyze Channel"):
                     at_risk = len(df[df["status"] == "At Risk"])
                     evergreen = len(df[df["status"] == "Evergreen"])
 
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Total", total)
-                    c2.metric("Dead", dead)
-                    c3.metric("At Risk", at_risk)
-                    c4.metric("Evergreen", evergreen)
+                    col1, col2, col3, col4 = st.columns(4)
+
+                    def kpi_card(title, value, color):
+                        return f"""
+                        <div class="card">
+                            <div class="kpi" style="color:{color}">{value}</div>
+                            <div class="kpi-label">{title}</div>
+                        </div>
+                        """
+
+                    col1.markdown(kpi_card("Total Videos", total, "#00C2FF"), unsafe_allow_html=True)
+                    col2.markdown(kpi_card("Dead", dead, "#FF4B4B"), unsafe_allow_html=True)
+                    col3.markdown(kpi_card("At Risk", at_risk, "#FFA500"), unsafe_allow_html=True)
+                    col4.markdown(kpi_card("Evergreen", evergreen, "#00FFAA"), unsafe_allow_html=True)
 
                     st.divider()
+
+
+                    st.subheader("💡 Key Insights")
+
+                    insights = generate_insights(df)
+
+                    for i in insights:
+                        st.info(i)
+
+                    st.divider()
+
+
 
                     # -------------------------------
                     # CHART
@@ -208,7 +328,32 @@ if st.button("Analyze Channel"):
                     st.subheader("📊 Content Health")
                     st.bar_chart(df["status"].value_counts())
 
+                    
+                    import plotly.express as px
+
+                    
+                    fig1 = px.pie(df, names="status", title="Content Distribution")
+                    fig2 = px.scatter(
+                        df,
+                        x="days_old",
+                        y="views_per_day",
+                        color="status",
+                        size="views",
+                        hover_data=["title"],
+                        title="Performance vs Age"
+                    )
+
+                    colA, colB = st.columns(2)
+
+                    with colA:
+                        st.plotly_chart(fig1, use_container_width=True, key="pie_chart")
+
+                    with colB:
+                        st.plotly_chart(fig2, use_container_width=True, key="scatter_chart")
+
                     st.divider()
+
+
 
                     # -------------------------------
                     # TABLE PREP
@@ -218,6 +363,14 @@ if st.button("Analyze Channel"):
                     df["short_title"] = df["title"].apply(
                         lambda x: x[:60] + "..." if len(x) > 60 else x
                     )
+
+                    df["views"] = df["views"].astype(int)
+                    df["views_per_day"] = df["views_per_day"].round(0).astype(int)
+                    df["performance_ratio"] = df["performance_ratio"].round(2)
+                    df["score"] = df["score"].round(0).astype(int)
+
+
+
 
                     df_table = df[[
                         "short_title",
