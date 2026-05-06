@@ -125,37 +125,53 @@ def extract_channel_id(user_input):
 # -------------------------------
 # FETCH DATA
 # -------------------------------
-def get_videos(channel_id):
+def get_videos(channel_id, max_results=20):
 
     videos = []
+    next_page_token = None
 
-    res = youtube.search().list(
-        part="snippet",
-        channelId=channel_id,
-        maxResults=20,
-        order="date"
-    ).execute()
+    while len(videos) < max_results:
 
-    for item in res["items"]:
+        request = youtube.search().list(
+            part="snippet",
+            channelId=channel_id,
+            maxResults=min(50, max_results - len(videos)),
+            order="date",
+            pageToken=next_page_token
+        )
 
-        vid = item["id"].get("videoId")
-        if not vid:
-            continue
+        response = request.execute()
 
-        data = youtube.videos().list(
-            part="snippet,statistics", id=vid
-        ).execute()["items"][0]
+        for item in response.get("items", []):
+            vid = item["id"].get("videoId")
+            if not vid:
+                continue
 
-        s = data["snippet"]
-        stats = data["statistics"]
+            data = youtube.videos().list(
+                part="snippet,statistics",
+                id=vid
+            ).execute().get("items", [])
 
-        videos.append({
-            "title": s["title"],
-            "views": int(stats.get("viewCount", 0)),
-            "likes": int(stats.get("likeCount", 0)),
-            "comments": int(stats.get("commentCount", 0)),
-            "published_at": pd.to_datetime(s["publishedAt"], utc=True),
-        })
+            if not data:
+                continue
+
+            d = data[0]
+            s = d["snippet"]
+            stats = d.get("statistics", {})
+
+            videos.append({
+                "video_id": vid,
+                "title": s["title"],
+                "views": int(stats.get("viewCount", 0)),
+                "likes": int(stats.get("likeCount", 0)),
+                "comments": int(stats.get("commentCount", 0)),
+                "published_at": pd.to_datetime(s["publishedAt"], utc=True),
+            })
+
+        next_page_token = response.get("nextPageToken")
+
+        if not next_page_token:
+            break
 
     df = pd.DataFrame(videos)
 
@@ -174,6 +190,15 @@ user_input = st.text_input(
     placeholder="https://youtube.com/@yourchannel"
 )
 
+video_limit = st.radio(
+    "Select Analysis Size",
+    ["Quick (20 videos)", "Deep (200 videos)"],
+    horizontal=True
+)
+
+MAX_RESULTS = 20 if video_limit == "Quick (20 videos)" else 200
+
+
 # -------------------------------
 # MAIN
 # -------------------------------
@@ -183,6 +208,9 @@ if st.button("Analyze"):
         st.warning("Enter input")
         st.stop()
 
+    st.caption(f"Analyzing {MAX_RESULTS} videos")
+
+
     with st.spinner("Analyzing..."):
 
         channel_id = extract_channel_id(user_input)
@@ -191,7 +219,7 @@ if st.button("Analyze"):
             st.error("Invalid input")
             st.stop()
 
-        df = get_videos(channel_id)
+        df = get_videos(channel_id, max_results=MAX_RESULTS)
         df = compute_kpis(df)
 
 
